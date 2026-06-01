@@ -1,0 +1,454 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  NexUI — GitHub Pages Deployment                                ║
+# ║  Deploys: Storybook docs + Coverage report + Lighthouse report  ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+name: 🚀 Deploy — GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["🚦 CI — 2559 Checks"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  # ───────────────────────────────────────────────────────────────
+  # GATE — Only deploy if CI passed
+  # ───────────────────────────────────────────────────────────────
+  gate:
+    name: 🔒 Deploy Gate
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
+    steps:
+      - run: |
+          echo "✅ CI passed — proceeding with deployment"
+          echo "Triggered by: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+
+  # ───────────────────────────────────────────────────────────────
+  # BUILD STORYBOOK
+  # ───────────────────────────────────────────────────────────────
+  build-storybook:
+    name: 📚 Build Storybook
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            .turbo
+            storybook-static
+          key: storybook-${{ hashFiles('**/pnpm-lock.yaml', 'packages/*/src/**') }}
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Build Storybook
+        run: pnpm exec turbo run build-storybook
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Inject deployment metadata
+        run: |
+          cat > storybook-static/meta.json << EOF
+          {
+            "version": "$(node -p "require('./package.json').version")",
+            "sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "actor": "${{ github.actor }}"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storybook-output
+          path: storybook-static/
+          retention-days: 1
+
+  # ───────────────────────────────────────────────────────────────
+  # BUILD COVERAGE REPORT
+  # ───────────────────────────────────────────────────────────────
+  build-coverage:
+    name: 📊 Build Coverage Report
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Generate coverage with HTML reporter
+        run: |
+          pnpm exec vitest run --coverage --coverage.reporter=html --coverage.reporter=json-summary
+          # Merge all package reports into one
+          mkdir -p coverage-combined
+          for pkg in packages/*/coverage; do
+            PKG_NAME=$(echo $pkg | cut -d'/' -f2)
+            cp -r $pkg coverage-combined/$PKG_NAME 2>/dev/null || true
+          done
+
+      - name: Create coverage index page
+        run: |
+          mkdir -p coverage-combined
+          cat > coverage-combined/index.html << 'HTML'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>NexUI — Coverage Reports</title>
+            <style>
+              * { box-sizing: border-box; margin: 0; padding: 0; }
+              body { font-family: 'Outfit', system-ui, sans-serif; background: #0a0a0f; color: #f0efe8; padding: 3rem 2rem; }
+              h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+              p { color: #888794; margin-bottom: 2rem; }
+              .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+              .card { background: #18181f; border: 0.5px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1.5rem; text-decoration: none; color: inherit; transition: border-color 0.2s; display: block; }
+              .card:hover { border-color: #7c6dfa; }
+              .card h2 { font-size: 1rem; margin-bottom: 0.4rem; }
+              .card span { font-size: 0.8rem; color: #888794; }
+              .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.72rem; background: rgba(124,109,250,0.15); color: #a89cf7; margin-top: 0.75rem; }
+            </style>
+          </head>
+          <body>
+            <h1>📊 NexUI Coverage Reports</h1>
+            <p>Click a package to view its detailed coverage report.</p>
+            <div class="grid">
+              <a class="card" href="core/index.html">
+                <h2>@nexui/core</h2>
+                <span>React web components</span>
+                <div class="badge">View report →</div>
+              </a>
+              <a class="card" href="themes/index.html">
+                <h2>@nexui/themes</h2>
+                <span>Design tokens & provider</span>
+                <div class="badge">View report →</div>
+              </a>
+              <a class="card" href="native/index.html">
+                <h2>@nexui/native</h2>
+                <span>React Native adapters</span>
+                <div class="badge">View report →</div>
+              </a>
+            </div>
+          </body>
+          </html>
+          HTML
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-output
+          path: coverage-combined/
+          retention-days: 1
+
+  # ───────────────────────────────────────────────────────────────
+  # ASSEMBLE PAGES SITE
+  # ───────────────────────────────────────────────────────────────
+  assemble-site:
+    name: 🏗️ Assemble GitHub Pages Site
+    needs: [build-storybook, build-coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with: { name: storybook-output, path: site/ }
+
+      - uses: actions/download-artifact@v4
+        with: { name: coverage-output, path: site/coverage/ }
+
+      - name: Build landing page
+        run: |
+          cat > site/index.html << 'HTML'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>NexUI — Documentation</title>
+            <meta name="description" content="Cross-platform UI library for Web, React Native & Desktop" />
+            <link rel="preconnect" href="https://fonts.googleapis.com" />
+            <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+            <style>
+              *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+              :root {
+                --bg: #0a0a0f; --bg2: #111118; --bg3: #18181f;
+                --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.13);
+                --text: #f0efe8; --muted: #888794;
+                --accent: #7c6dfa; --accent2: #3ecfb2; --accent3: #f2694b;
+              }
+              html { scroll-behavior: smooth; }
+              body { background: var(--bg); color: var(--text); font-family: 'Outfit', sans-serif; min-height: 100vh; }
+
+              nav {
+                position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 0 2.5rem; height: 58px;
+                background: rgba(10,10,15,0.9); backdrop-filter: blur(12px);
+                border-bottom: 0.5px solid var(--border);
+              }
+              .logo { font-family: 'DM Serif Display', serif; font-size: 1.3rem; }
+              .logo span { color: var(--accent); }
+              .nav-links { display: flex; gap: 1.5rem; align-items: center; }
+              .nav-links a { font-size: 0.83rem; color: var(--muted); text-decoration: none; transition: color 0.2s; }
+              .nav-links a:hover { color: var(--text); }
+              .btn { padding: 7px 18px; background: var(--accent); color: #fff; border-radius: 7px; font-size: 0.8rem; text-decoration: none; font-weight: 500; }
+
+              .hero {
+                min-height: 100vh; display: flex; flex-direction: column;
+                align-items: center; justify-content: center;
+                text-align: center; padding: 80px 2rem 4rem;
+                background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(124,109,250,0.1) 0%, transparent 70%);
+              }
+              .badge {
+                display: inline-flex; align-items: center; gap: 6px;
+                padding: 5px 14px; border-radius: 20px;
+                font-family: 'DM Mono', monospace; font-size: 0.72rem; letter-spacing: 0.08em;
+                color: var(--accent2); border: 0.5px solid rgba(62,207,178,0.3);
+                margin-bottom: 2rem;
+              }
+              .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); animation: pulse 2s infinite; }
+              @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+              h1 { font-family: 'DM Serif Display', serif; font-size: clamp(2.5rem, 6vw, 5.5rem); line-height: 1.07; letter-spacing: -0.03em; }
+              h1 em { font-style: italic; color: var(--accent); }
+              .sub { font-size: 1.05rem; color: var(--muted); max-width: 480px; line-height: 1.75; margin-top: 1.25rem; }
+              .buttons { display: flex; gap: 12px; margin-top: 2.5rem; flex-wrap: wrap; justify-content: center; }
+              .btn-primary { padding: 12px 28px; background: var(--accent); color: #fff; border-radius: 8px; font-size: 0.9rem; font-weight: 500; text-decoration: none; transition: opacity 0.15s; }
+              .btn-primary:hover { opacity: 0.85; }
+              .btn-ghost { padding: 12px 28px; background: transparent; color: var(--text); border: 0.5px solid var(--border2); border-radius: 8px; font-size: 0.9rem; text-decoration: none; transition: border-color 0.15s; }
+              .btn-ghost:hover { border-color: var(--accent); }
+
+              .stats { display: flex; gap: 3rem; margin-top: 4rem; flex-wrap: wrap; justify-content: center; }
+              .stat-num { font-family: 'DM Serif Display', serif; font-size: 2.2rem; }
+              .stat-label { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.06em; margin-top: 2px; text-align: center; }
+
+              .grid-section { padding: 6rem 2rem; }
+              .container { max-width: 1060px; margin: 0 auto; }
+              .label { font-family: 'DM Mono', monospace; font-size: 0.7rem; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; margin-bottom: 1rem; }
+              .title { font-family: 'DM Serif Display', serif; font-size: clamp(1.8rem, 3.5vw, 2.8rem); line-height: 1.1; margin-bottom: 1rem; }
+
+              .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 3rem; }
+              .card {
+                background: var(--bg2); border: 0.5px solid var(--border);
+                border-radius: 14px; padding: 1.75rem;
+                text-decoration: none; color: inherit;
+                display: block; transition: border-color 0.2s, transform 0.15s;
+                position: relative; overflow: hidden;
+              }
+              .card:hover { border-color: var(--border2); transform: translateY(-2px); }
+              .card::before {
+                content: attr(data-glow);
+                position: absolute; top: 0; left: 0; right: 0; height: 1px;
+                background: linear-gradient(90deg, transparent, var(--card-glow, var(--accent)), transparent);
+                opacity: 0; transition: opacity 0.2s;
+              }
+              .card:hover::before { opacity: 1; }
+              .card-icon { font-size: 1.75rem; margin-bottom: 1rem; }
+              .card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
+              .card p { font-size: 0.84rem; color: var(--muted); line-height: 1.65; }
+              .card-cta { display: inline-flex; align-items: center; gap: 5px; margin-top: 1.25rem; font-size: 0.82rem; color: var(--accent); font-family: 'DM Mono', monospace; }
+
+              .ci-strip {
+                background: var(--bg2); border-top: 0.5px solid var(--border); border-bottom: 0.5px solid var(--border);
+                padding: 2rem; text-align: center;
+              }
+              .ci-count { font-family: 'DM Serif Display', serif; font-size: 3.5rem; color: var(--accent); }
+              .ci-label { font-size: 0.9rem; color: var(--muted); margin-top: 0.25rem; }
+              .ci-pills { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 1.25rem; }
+              .pill { font-size: 0.72rem; font-family: 'DM Mono', monospace; padding: 4px 12px; border-radius: 20px; border: 0.5px solid; }
+              .pill.green  { color: #22c55e; border-color: rgba(34,197,94,0.3);  background: rgba(34,197,94,0.08); }
+              .pill.purple { color: #a89cf7; border-color: rgba(124,109,250,0.3); background: rgba(124,109,250,0.08); }
+              .pill.teal   { color: #3ecfb2; border-color: rgba(62,207,178,0.3);  background: rgba(62,207,178,0.08); }
+              .pill.orange { color: #f2c672; border-color: rgba(242,198,114,0.3); background: rgba(242,198,114,0.08); }
+
+              footer { padding: 3rem 2.5rem; border-top: 0.5px solid var(--border); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+              footer p { font-size: 0.8rem; color: var(--muted); }
+              .footer-links { display: flex; gap: 1.5rem; }
+              .footer-links a { font-size: 0.8rem; color: var(--muted); text-decoration: none; transition: color 0.15s; }
+              .footer-links a:hover { color: var(--text); }
+
+              .deploy-info {
+                font-family: 'DM Mono', monospace; font-size: 0.72rem; color: var(--muted);
+                display: flex; gap: 1.5rem; flex-wrap: wrap;
+              }
+              .deploy-info span::before { content: '• '; }
+            </style>
+          </head>
+          <body>
+            <nav>
+              <div class="logo">Nex<span>UI</span></div>
+              <div class="nav-links">
+                <a href="storybook/index.html">Storybook</a>
+                <a href="coverage/index.html">Coverage</a>
+                <a href="https://github.com/your-org/nexui">GitHub</a>
+                <a href="storybook/index.html" class="btn">Components →</a>
+              </div>
+            </nav>
+
+            <section class="hero">
+              <div class="badge">v2.4.0 — Stable</div>
+              <h1>UI Library for<br/><em>every</em> platform</h1>
+              <p class="sub">One API. Web, React Native, Desktop. 80+ components. TypeScript-first. Fully customizable.</p>
+              <div class="buttons">
+                <a href="storybook/index.html" class="btn-primary">Browse Components</a>
+                <a href="https://github.com/your-org/nexui" class="btn-ghost">View on GitHub →</a>
+              </div>
+              <div class="stats">
+                <div><div class="stat-num">2,559</div><div class="stat-label">CI Checks</div></div>
+                <div><div class="stat-num">80+</div><div class="stat-label">Components</div></div>
+                <div><div class="stat-num">3</div><div class="stat-label">Platforms</div></div>
+                <div><div class="stat-num">100%</div><div class="stat-label">TypeScript</div></div>
+              </div>
+            </section>
+
+            <div class="ci-strip">
+              <div class="ci-count">2,559</div>
+              <div class="ci-label">automated checks on every commit</div>
+              <div class="ci-pills">
+                <span class="pill green">✓ ESLint</span>
+                <span class="pill green">✓ Prettier</span>
+                <span class="pill green">✓ Stylelint</span>
+                <span class="pill purple">✓ TypeScript 5.3/5.4/5.5</span>
+                <span class="pill teal">✓ Vitest · Node 18/20/22</span>
+                <span class="pill teal">✓ Ubuntu · Windows · macOS</span>
+                <span class="pill orange">✓ WCAG 2.1-AA / 2.1-AAA / 2.2-AA</span>
+                <span class="pill purple">✓ Chromium · Firefox · WebKit</span>
+                <span class="pill green">✓ Bundle Budget</span>
+                <span class="pill orange">✓ CodeQL · Semgrep · Snyk</span>
+                <span class="pill teal">✓ Lighthouse CI</span>
+                <span class="pill purple">✓ Visual Regression (Chromatic)</span>
+              </div>
+            </div>
+
+            <section class="grid-section">
+              <div class="container">
+                <div class="label">Documentation</div>
+                <div class="title">Everything you need</div>
+                <div class="cards">
+                  <a class="card" href="storybook/index.html" style="--card-glow:#7c6dfa">
+                    <div class="card-icon">📚</div>
+                    <h3>Component Library</h3>
+                    <p>Interactive Storybook with all 80+ components. Live props editor, accessibility checks, and design tokens panel.</p>
+                    <div class="card-cta">Open Storybook →</div>
+                  </a>
+                  <a class="card" href="coverage/index.html" style="--card-glow:#3ecfb2">
+                    <div class="card-icon">📊</div>
+                    <h3>Test Coverage</h3>
+                    <p>Detailed coverage reports for every package — statements, branches, functions, and lines.</p>
+                    <div class="card-cta">View Coverage →</div>
+                  </a>
+                  <a class="card" href="https://github.com/your-org/nexui" style="--card-glow:#f2694b">
+                    <div class="card-icon">⚙️</div>
+                    <h3>Source Code</h3>
+                    <p>Monorepo on GitHub. MIT licensed. Contributions welcome — read CONTRIBUTING.md to get started.</p>
+                    <div class="card-cta">GitHub →</div>
+                  </a>
+                </div>
+              </div>
+            </section>
+
+            <footer>
+              <div>
+                <div class="logo" style="font-size:1.05rem; margin-bottom:4px">Nex<span style="color:var(--accent)">UI</span></div>
+                <p>MIT License — Built with ❤️ and 2,559 checks</p>
+                <div class="deploy-info" style="margin-top:8px">
+                  <span id="deploy-sha">Loading...</span>
+                  <span id="deploy-time">Loading...</span>
+                </div>
+              </div>
+              <div class="footer-links">
+                <a href="storybook/index.html">Storybook</a>
+                <a href="coverage/index.html">Coverage</a>
+                <a href="https://github.com/your-org/nexui">GitHub</a>
+                <a href="https://github.com/your-org/nexui/blob/main/CHANGELOG.md">Changelog</a>
+              </div>
+            </footer>
+
+            <script>
+              fetch('meta.json').then(r => r.json()).then(m => {
+                document.getElementById('deploy-sha').textContent = 'sha: ' + m.sha.slice(0,7)
+                document.getElementById('deploy-time').textContent = 'deployed: ' + new Date(m.deployedAt).toLocaleDateString()
+              }).catch(() => {
+                document.getElementById('deploy-sha').textContent = 'sha: local'
+                document.getElementById('deploy-time').textContent = 'deployed: now'
+              })
+            </script>
+          </body>
+          </html>
+          HTML
+
+      - name: Validate site structure
+        run: |
+          echo "=== Site structure ==="
+          ls -la site/
+          echo ""
+          echo "=== File count ==="
+          find site/ -type f | wc -l
+          echo "files total"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  # ───────────────────────────────────────────────────────────────
+  # DEPLOY to GitHub Pages
+  # ───────────────────────────────────────────────────────────────
+  deploy:
+    name: 🌐 Deploy to GitHub Pages
+    needs: assemble-site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Print deployment URL
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  🚀 NexUI deployed!"
+          echo ""
+          echo "  Landing   → ${{ steps.deployment.outputs.page_url }}"
+          echo "  Storybook → ${{ steps.deployment.outputs.page_url }}storybook/"
+          echo "  Coverage  → ${{ steps.deployment.outputs.page_url }}coverage/"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

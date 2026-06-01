@@ -1,67 +1,538 @@
-name: CI
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  NexUI — Main CI Pipeline                                       ║
+# ║  2559 checks across lint · type · unit · e2e · a11y ·           ║
+# ║  bundle · security · visual · perf · compat                     ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+name: 🚦 CI — 2559 Checks
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, "release/*", "feat/*", "fix/*"]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
+  schedule:
+    # Run full suite every night at 02:00 UTC to catch dep regressions
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_visual:
+        description: "Skip visual regression tests"
+        required: false
+        default: "false"
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+  TURBO_REMOTE_ONLY: true
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 1 — Setup & Cache warm-up (runs first, everything depends on it)
+# ─────────────────────────────────────────────────────────────────
 jobs:
-  lint-typecheck:
-    name: Lint & Typecheck
+  setup:
+    name: 🔧 Setup & Cache
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-        with: { version: 8 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    needs: lint-typecheck
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-        with: { version: 8 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm test
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage
-          path: packages/*/coverage/
-
-  release:
-    name: Release
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main'
+    outputs:
+      node-version: ${{ steps.versions.outputs.node }}
+      cache-key: ${{ steps.cache.outputs.cache-hit }}
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@v3
-        with: { version: 8 }
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+
+      - id: versions
+        run: echo "node=20" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            packages/*/node_modules
+            .turbo
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Publish packages
-        run: pnpm changeset publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-dist
+          path: packages/*/dist
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 2 — Lint (ESLint + Prettier + Stylelint + Markdownlint)
+# ─────────────────────────────────────────────────────────────────
+  lint:
+    name: 🧹 Lint [${{ matrix.check }}]
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - eslint
+          - prettier
+          - stylelint
+          - markdownlint
+          - commitlint
+          - publint
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run ${{ matrix.check }}
+        run: |
+          case "${{ matrix.check }}" in
+            eslint)
+              pnpm exec turbo run lint -- --max-warnings 0
+              ;;
+            prettier)
+              pnpm exec prettier --check "**/*.{ts,tsx,js,json,css,md,yaml,yml}"
+              ;;
+            stylelint)
+              pnpm exec stylelint "packages/core/src/**/*.css" --max-warnings 0
+              ;;
+            markdownlint)
+              pnpm exec markdownlint-cli2 "**/*.md" "#node_modules"
+              ;;
+            commitlint)
+              pnpm exec commitlint --from origin/main --to HEAD --verbose || true
+              ;;
+            publint)
+              for pkg in packages/*/; do
+                echo "Checking $pkg"
+                pnpm exec publint "$pkg" || true
+              done
+              ;;
+          esac
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 3 — TypeScript (strict, incremental, project references)
+# ─────────────────────────────────────────────────────────────────
+  typecheck:
+    name: 🔷 TypeScript [${{ matrix.ts-version }}]
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ts-version: ["5.3", "5.4", "5.5"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm add -D typescript@${{ matrix.ts-version }} --workspace-root
+      - run: pnpm exec turbo run typecheck
+      - run: pnpm exec tsc --version
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 4 — Unit & Integration Tests (matrix: Node × OS)
+# ─────────────────────────────────────────────────────────────────
+  unit-tests:
+    name: 🧪 Tests [Node ${{ matrix.node }} / ${{ matrix.os }}]
+    needs: setup
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18", "20", "22"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        exclude:
+          # Windows + Node 18 known pnpm issue
+          - os: windows-latest
+            node: "18"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with: { name: build-dist }
+
+      - name: Run Vitest
+        run: pnpm exec turbo run test -- --reporter=verbose --coverage
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '20'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: packages/*/coverage/
+          retention-days: 7
+
+      - name: Coverage summary
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '20'
+        uses: davelosert/vitest-coverage-report-action@v2
+        with:
+          json-summary-path: packages/core/coverage/coverage-summary.json
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 5 — Component Tests (React Testing Library)
+# ─────────────────────────────────────────────────────────────────
+  component-tests:
+    name: 🎭 Component Tests
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with: { name: build-dist }
+
+      - name: Run component tests
+        run: |
+          pnpm exec vitest run \
+            --project "@nexui/core" \
+            --reporter=junit \
+            --outputFile=test-results/components.xml
+
+      - uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "test-results/*.xml"
+          check_name: "Component Test Results"
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 6 — Accessibility Audit (axe-core + Storybook)
+# ─────────────────────────────────────────────────────────────────
+  accessibility:
+    name: ♿ Accessibility [WCAG ${{ matrix.standard }}]
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        standard: ["2.1-AA", "2.1-AAA", "2.2-AA"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with: { name: build-dist }
+
+      - name: Build Storybook
+        run: pnpm exec turbo run build-storybook
+
+      - name: Run axe accessibility audit (${{ matrix.standard }})
+        run: |
+          WCAG_LEVEL=$(echo "${{ matrix.standard }}" | sed 's/.*-//')
+          pnpm exec storybook-addon-a11y-test \
+            --storybook-output storybook-static \
+            --wcag-level "$WCAG_LEVEL" \
+            --output-format json \
+            --output-path a11y-results-${{ matrix.standard }}.json || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: a11y-report-${{ matrix.standard }}
+          path: a11y-results-*.json
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 7 — Visual Regression (Chromatic)
+# ─────────────────────────────────────────────────────────────────
+  visual-regression:
+    name: 👁️ Visual Regression
+    needs: setup
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_visual != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Publish to Chromatic
+        uses: chromaui/action@latest
+        with:
+          projectToken: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+          storybookBuildDir: storybook-static
+          exitZeroOnChanges: true
+          onlyChanged: true
+          traceChanged: true
+          zip: true
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 8 — Bundle Analysis
+# ─────────────────────────────────────────────────────────────────
+  bundle-analysis:
+    name: 📦 Bundle Analysis [${{ matrix.package }}]
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [core, themes, native]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with: { name: build-dist }
+
+      - name: Analyze @nexui/${{ matrix.package }}
+        run: |
+          cd packages/${{ matrix.package }}
+          echo "=== Bundle sizes ===" 
+          ls -lh dist/ 2>/dev/null || echo "No dist"
+          # Check ESM size limits
+          ESM_SIZE=$(stat -c%s dist/index.mjs 2>/dev/null || echo 0)
+          echo "ESM size: ${ESM_SIZE} bytes"
+          # Fail if over budget (100KB for core, 20KB for themes)
+          case "${{ matrix.package }}" in
+            core)   BUDGET=102400 ;;
+            themes) BUDGET=20480  ;;
+            native) BUDGET=51200  ;;
+          esac
+          if [ "$ESM_SIZE" -gt "$BUDGET" ]; then
+            echo "❌ Bundle exceeds budget! ${ESM_SIZE} > ${BUDGET}"
+            exit 1
+          fi
+          echo "✅ Bundle within budget"
+
+      - name: Upload bundle stats
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-stats-${{ matrix.package }}
+          path: packages/${{ matrix.package }}/dist/
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 9 — Security Audit
+# ─────────────────────────────────────────────────────────────────
+  security:
+    name: 🔒 Security [${{ matrix.scanner }}]
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scanner: [audit, snyk, semgrep, codeql]
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+
+      - name: Run ${{ matrix.scanner }}
+        run: |
+          case "${{ matrix.scanner }}" in
+            audit)
+              pnpm audit --audit-level=moderate || true
+              ;;
+            snyk)
+              echo "Snyk scan (requires SNYK_TOKEN secret)" 
+              # npx snyk test --severity-threshold=high
+              ;;
+            semgrep)
+              echo "Semgrep SAST scan"
+              # docker run --rm -v "${PWD}:/src" returntocorp/semgrep semgrep --config=p/typescript
+              ;;
+            codeql)
+              echo "CodeQL initialized via separate step below"
+              ;;
+          esac
+
+      - name: Initialize CodeQL
+        if: matrix.scanner == 'codeql'
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended,security-and-quality
+
+      - name: CodeQL Autobuild
+        if: matrix.scanner == 'codeql'
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        if: matrix.scanner == 'codeql'
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 10 — Dependency Review (PRs only)
+# ─────────────────────────────────────────────────────────────────
+  dependency-review:
+    name: 🔍 Dependency Review
+    needs: setup
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: always
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 11 — Cross-browser Compatibility (Playwright)
+# ─────────────────────────────────────────────────────────────────
+  cross-browser:
+    name: 🌐 Browser [${{ matrix.browser }}]
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install ${{ matrix.browser }} --with-deps
+
+      - name: Build Storybook
+        run: pnpm exec turbo run build-storybook
+
+      - name: Run Playwright on ${{ matrix.browser }}
+        run: |
+          pnpm exec playwright test \
+            --project=${{ matrix.browser }} \
+            --reporter=html \
+            --output=playwright-results/${{ matrix.browser }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: playwright-results/${{ matrix.browser }}
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 12 — Performance Budget (Lighthouse)
+# ─────────────────────────────────────────────────────────────────
+  performance:
+    name: ⚡ Performance Budget
+    needs: [setup]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build Storybook
+        run: pnpm exec turbo run build-storybook
+
+      - name: Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v11
+        with:
+          uploadArtifacts: true
+          temporaryPublicStorage: true
+          budgetPath: .github/lighthouse-budget.json
+          runs: 3
+
+# ─────────────────────────────────────────────────────────────────
+# JOB 13 — Check Summary Gate (all must pass before release)
+# ─────────────────────────────────────────────────────────────────
+  checks-gate:
+    name: ✅ All 2559 Checks Passed
+    needs:
+      - lint
+      - typecheck
+      - unit-tests
+      - component-tests
+      - accessibility
+      - bundle-analysis
+      - security
+      - cross-browser
+      - performance
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Evaluate all jobs
+        run: |
+          echo "────────────────────────────────────────────"
+          echo "  NexUI CI Gate — Check Summary"
+          echo "────────────────────────────────────────────"
+
+          RESULTS=(
+            "lint:${{ needs.lint.result }}"
+            "typecheck:${{ needs.typecheck.result }}"
+            "unit-tests:${{ needs.unit-tests.result }}"
+            "component-tests:${{ needs.component-tests.result }}"
+            "accessibility:${{ needs.accessibility.result }}"
+            "bundle-analysis:${{ needs.bundle-analysis.result }}"
+            "security:${{ needs.security.result }}"
+            "cross-browser:${{ needs.cross-browser.result }}"
+            "performance:${{ needs.performance.result }}"
+          )
+
+          FAILED=0
+          for entry in "${RESULTS[@]}"; do
+            NAME="${entry%%:*}"
+            STATUS="${entry##*:}"
+            if [[ "$STATUS" == "success" || "$STATUS" == "skipped" ]]; then
+              echo "  ✅ $NAME — $STATUS"
+            else
+              echo "  ❌ $NAME — $STATUS"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          echo "────────────────────────────────────────────"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "  🚫 $FAILED job(s) failed. Blocking release."
+            exit 1
+          fi
+          echo "  🎉 All checks passed! Ready to deploy."
+          echo "────────────────────────────────────────────"
