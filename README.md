@@ -1,133 +1,327 @@
-# NexUI
+# NTTKTION
 
-> Cross-platform UI library for Web, React Native & Desktop — one API, every surface.
+> High-performance, scalable, and developer-first TypeScript ecosystem for building modern applications, design systems, tooling, and cross-platform experiences.
 
-[![CI](https://github.com/your-org/nexui/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/nexui/actions)
-[![npm version](https://img.shields.io/npm/v/@nexui/core)](https://www.npmjs.com/package/@nexui/core)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
----
-
-## Packages
-
-| Package | Description | Version |
-|---------|-------------|---------|
-| `@nexui/core` | React component library for Web | ![npm](https://img.shields.io/npm/v/@nexui/core) |
-| `@nexui/themes` | Design tokens, `createTheme`, `NexProvider` | ![npm](https://img.shields.io/npm/v/@nexui/themes) |
-| `@nexui/native` | React Native adapters | ![npm](https://img.shields.io/npm/v/@nexui/native) |
+<p align="center">
+  <img src="https://img.shields.io/github/license/manucian-official/nttktion?style=for-the-badge" />
+  <img src="https://img.shields.io/github/stars/manucian-official/nttktion?style=for-the-badge" />
+  <img src="https://img.shields.io/github/issues/manucian-official/nttktion?style=for-the-badge" />
+  <img src="https://img.shields.io/github/last-commit/manucian-official/nttktion?style=for-the-badge" />
+</p>
 
 ---
 
-## Quick start
+## 🚀 Overview
 
-```bash
-pnpm add @nexui/core @nexui/themes
-```
+**NTTKTION** is a modern TypeScript monorepo ecosystem focused on performance, maintainability, scalability, and developer experience.
 
-```tsx
-import { NexProvider } from '@nexui/themes'
-import { Button, Card, Badge } from '@nexui/core'
+The project provides a unified foundation for building:
 
-export default function App() {
-  return (
-    <NexProvider theme="dark">
-      <Card radius="lg">
-        <Badge color="primary">New</Badge>
-        <Button variant="solid" color="primary">
-          Get started
-        </Button>
-      </Card>
-    </NexProvider>
-  )
-}
-```
+- Web Applications
+- React Native Applications
+- UI Component Libraries
+- Design Systems
+- Internal Developer Tools
+- APIs & Services
+- Future AI-powered Integrations
 
-## Custom theme
-
-```tsx
-import { createTheme, NexProvider } from '@nexui/themes'
-
-const myTheme = createTheme({
-  colors: {
-    primary:   '#7c6dfa',
-    secondary: '#3ecfb2',
-  },
-  radius: {
-    lg: '16px',
-  },
-  fonts: {
-    sans: '"Outfit", sans-serif',
-  },
-})
-
-<NexProvider tokens={myTheme}>...</NexProvider>
-```
-
-## React Native
-
-```bash
-pnpm add @nexui/native @nexui/themes
-```
-
-```tsx
-import { Button } from '@nexui/native'
-import { NexProvider } from '@nexui/themes'
-
-export default function Screen() {
-  return (
-    <NexProvider>
-      <Button label="Tap me" variant="solid" onPress={() => {}} />
-    </NexProvider>
-  )
-}
-```
+Designed with a modular architecture, NTTKTION allows teams and independent developers to scale projects without sacrificing code quality or maintainability.
 
 ---
 
-## Development
+## ✨ Features
+
+### ⚡ Performance First
+
+- Optimized package structure
+- Tree-shakeable exports
+- Lightweight runtime
+- Fast builds with Turbo
+
+### 🔒 Type Safe
+
+- Strict TypeScript configuration
+- End-to-end type safety
+- Better IDE support
+- Reduced runtime errors
+
+### 🎨 Design System
+
+- Centralized design tokens
+- Theme engine
+- Dark / Light mode support
+- Consistent UI development
+
+### 📦 Monorepo Architecture
+
+- Shared packages
+- Unified dependency management
+- Consistent tooling
+- Scalable project structure
+
+### 🌎 Cross Platform
+
+Build for:
+
+- Web
+- Mobile
+- Desktop
+- Internal Systems
+- Future Platform Integrations
+
+---
+
+# 🏗️ Technology Stack
+
+| Technology | Purpose |
+|------------|----------|
+| TypeScript | Core Language |
+| React | Web Applications |
+| React Native | Mobile Applications |
+| TurboRepo | Monorepo Management |
+| PNPM | Dependency Management |
+| ESLint | Code Quality |
+| GitHub Actions | CI/CD |
+| Node.js | Runtime Environment |
+
+---
+
+# 📦 Installation
+
+Clone the repository:
 
 ```bash
-# Install dependencies
+git clone https://github.com/manucian-official/nttktion.git
+```
+
+Enter the project:
+
+```bash
+cd nttktion
+```
+
+Install dependencies:
+
+```bash
 pnpm install
+```
 
-# Build all packages
-pnpm build
+---
 
-# Run all tests
-pnpm test
+# 🚀 Development
 
-# Start dev watch mode
+Start development mode:
+
+```bash
 pnpm dev
-
-# Lint & typecheck
-pnpm lint && pnpm typecheck
 ```
 
-## Project structure
+Build all packages:
 
+```bash
+pnpm build
 ```
-nexui/
+
+Run tests:
+
+```bash
+pnpm test
+```
+
+Run linting:
+
+```bash
+pnpm lint
+```
+
+Run type checking:
+
+```bash
+pnpm typecheck
+```
+
+---
+
+# 📂 Repository Structure
+
+```text
+nttktion/
+│
 ├── packages/
-│   ├── core/          # @nexui/core — React web components
-│   │   └── src/
-│   │       ├── components/
-│   │       │   ├── Button/
-│   │       │   ├── Card/
-│   │       │   ├── Badge/
-│   │       │   ├── Input/
-│   │       │   ├── Toggle/
-│   │       │   └── Modal/
-│   │       └── utils/
-│   ├── themes/        # @nexui/themes — tokens + NexProvider
-│   └── native/        # @nexui/native — React Native adapters
+│   │
+│   ├── core/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── utilities/
+│   │   └── types/
+│   │
+│   ├── themes/
+│   │   ├── tokens/
+│   │   ├── providers/
+│   │   └── themes/
+│   │
+│   └── native/
+│
+├── apps/
+│
+├── examples/
+│
+├── docs/
+│
+├── scripts/
+│
+├── tests/
+│
 ├── .github/
-│   └── workflows/ci.yml
+│   └── workflows/
+│
 ├── turbo.json
 ├── tsconfig.json
-├── .eslintrc.cjs
-└── package.json
+├── package.json
+└── README.md
 ```
 
-## License
+---
 
-MIT © NexUI Contributors
+# 🎯 Project Goals
+
+NTTKTION aims to become a complete ecosystem for modern development.
+
+### Current Focus
+
+- Component Architecture
+- Design System Foundation
+- Monorepo Infrastructure
+- Theme Engine
+- Developer Experience
+
+### Future Expansion
+
+- AI Tooling
+- Visual Theme Builder
+- Documentation Platform
+- Component Playground
+- CLI Utilities
+- Cloud Integrations
+- Automation Workflows
+
+---
+
+# 🔥 Performance Objectives
+
+- Fast startup times
+- Minimal bundle size
+- Efficient code splitting
+- Tree-shakeable modules
+- Reduced build times
+- Optimized CI pipelines
+
+---
+
+# 🛡️ Engineering Principles
+
+### Maintainability
+
+Code should remain understandable and scalable over time.
+
+### Simplicity
+
+Prefer simple solutions before introducing complexity.
+
+### Consistency
+
+Shared standards across all packages and applications.
+
+### Reliability
+
+Stable APIs and predictable behavior.
+
+### Performance
+
+Performance is considered from the beginning, not as an afterthought.
+
+---
+
+# 🤝 Contributing
+
+Contributions are welcome.
+
+1. Fork the repository
+2. Create a feature branch
+
+```bash
+git checkout -b feature/amazing-feature
+```
+
+3. Commit your changes
+
+```bash
+git commit -m "Add amazing feature"
+```
+
+4. Push your branch
+
+```bash
+git push origin feature/amazing-feature
+```
+
+5. Open a Pull Request
+
+---
+
+# 📋 Development Standards
+
+### Code Style
+
+```bash
+pnpm lint
+```
+
+### Type Checking
+
+```bash
+pnpm typecheck
+```
+
+### Testing
+
+```bash
+pnpm test
+```
+
+All pull requests should pass linting, testing, and type checking before being merged.
+
+---
+
+# 🔒 Security
+
+Security issues should be reported responsibly.
+
+If you discover a vulnerability:
+
+- Do not publicly disclose it immediately.
+- Contact maintainers privately.
+- Provide reproduction steps when possible.
+
+---
+
+# 📜 License
+
+MIT License
+
+Copyright © NTTKTION Contributors
+
+---
+
+# 🌟 Vision
+
+NTTKTION is not just a codebase.
+
+It is a long-term ecosystem designed to provide a solid foundation for building scalable software, reusable tools, and modern developer experiences across multiple platforms.
+
+---
+
+<p align="center">
+  <strong>NTTKTION</strong><br>
+  Building the future, one module at a time.
+</p>
