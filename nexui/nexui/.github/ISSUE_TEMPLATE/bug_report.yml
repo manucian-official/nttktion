@@ -1,0 +1,36 @@
+name: 🐛 Bug Report
+description: Report a bug in NexUI
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      placeholder: "@nexui/core"
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "2.4.0"
+    validations: { required: true }
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+    validations: { required: true }
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations: { required: true }
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options: [Web, React Native, Desktop, All]

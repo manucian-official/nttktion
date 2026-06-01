@@ -1,0 +1,18 @@
+# NexUI — Code Owners
+# These people are auto-requested for review on matching PRs
+
+# Global
+*                          @nexui-core-team
+
+# Package ownership
+packages/core/**           @nexui-core-team
+packages/themes/**         @nexui-core-team @nexui-design-team
+packages/native/**         @nexui-native-team
+
+# CI/CD
+.github/**                 @nexui-infra-team
+turbo.json                 @nexui-infra-team
+
+# Docs
+README.md                  @nexui-docs-team
+CONTRIBUTING.md            @nexui-docs-team
